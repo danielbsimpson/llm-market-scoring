@@ -18,11 +18,11 @@ The long-term goal is a human-in-the-loop, self-correcting loop: the system prop
 on how well past scores predicted returns, and you approve them from the dashboard.
 
 > [!NOTE]
-> This is a local-first project. Your email content, OAuth tokens, models, and data never leave your machine.
+> This is a local-first project. Your exported newsletters, models, and data never leave your machine.
 
 ## Features
 
-- **Newsletter ingestion** — pull articles from Gmail (starting with Robinhood's "The Snack"), using the email timestamp as the signal time. Adding new sources is a pluggable parser.
+- **Local file ingestion** — drop exported newsletters/articles (e.g. Robinhood's "The Snack") into a watched folder as `.eml`, `.html`, `.txt`, or `.md` files. Each file's date (from headers, filename, or front matter) becomes the signal time. Adding a new source is a pluggable parser. *(Direct newsletter ingestion may be added later.)*
 - **Markdown-driven prompts** — each LLM scorer is defined by an editable Markdown file. Change the file, change the behavior. The same article runs through multiple prompts to score different assets.
 - **Structured scoring** — every asset gets a JSON score: outlook in `[-1.0, +1.0]`, a confidence in `[0, 1]`, and a short rationale.
 - **Swappable local models** — talk to any model served by Ollama or `llama-server.exe` via the OpenAI-compatible API; switch models with a config change, no code edits.
@@ -47,7 +47,7 @@ flowchart TD
         MKT["Market Data"]
         ML["ML / Back-test"]
     end
-    GMAIL["Gmail API"] --> ING
+    FILES["Local files<br/>(.eml/.html/.txt/.md)"] --> ING
     YF["yfinance"] --> MKT
     OLLAMA["Ollama / llama-server<br/>(OpenAI-compatible)"] --> LLM
     SK["scikit-learn"] --> ML
@@ -55,9 +55,9 @@ flowchart TD
     BE --> STORE[("SQLite + Parquet")]
 ```
 
-**Data flow:** ingest newsletters → score each article through N LLM scorers → pull market data and
-compute forward returns → align scores at time `t` against returns at `t + window` → train sklearn
-models → evaluate prompts/models → propose prompt edits (you approve) → visualize.
+**Data flow:** ingest exported newsletter files → score each article through N LLM scorers → pull market
+data and compute forward returns → align scores at time `t` against returns at `t + window` → train
+sklearn models → evaluate prompts/models → propose prompt edits (you approve) → visualize.
 
 ## Tech stack
 
@@ -68,7 +68,7 @@ models → evaluate prompts/models → propose prompt edits (you approve) → vi
 | Storage | SQLite (metadata) · Parquet (timeseries/features) · SQLAlchemy · Alembic |
 | Market data | yfinance · pandas · numpy |
 | Machine learning | scikit-learn |
-| Ingestion | Gmail API · BeautifulSoup |
+| Ingestion | Local file parsers (.eml/.html/.txt/.md) · BeautifulSoup |
 | Frontend | React · TypeScript · Vite |
 
 ## Prerequisites
@@ -130,7 +130,7 @@ Backend settings live in `backend/.env`. The root [.env.example](.env.example) d
 | `LLM_NUM_CTX` | Context window to request (default `4096`) |
 | `DATABASE_URL` | SQLite database path |
 | `RETURN_WINDOWS` | Forward-return windows in trading days (`1,5,21,63`) |
-| `GMAIL_*` | Gmail API ingestion settings (sender, OAuth file paths) |
+| `INGEST_DIR` | Folder to read exported newsletter/article files from |
 
 Swap to llama.cpp by pointing `LLM_BASE_URL` at a running `llama-server.exe` (e.g. `http://localhost:8080/v1`)
 and setting `LLM_PROVIDER=llama_server`.

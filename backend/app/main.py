@@ -7,8 +7,11 @@ from __future__ import annotations
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import func, select
 
 from app.config import settings
+from app.db.models import Asset
+from app.db.session import SessionLocal
 from app.llm.engine import engine
 
 app = FastAPI(
@@ -38,6 +41,20 @@ def health_llm() -> dict:
     return engine.health()
 
 
+@app.get("/health/db")
+def health_db() -> dict:
+    """Confirm the database is reachable and report asset counts by kind."""
+    try:
+        with SessionLocal() as db:
+            rows = db.execute(
+                select(Asset.kind, func.count()).group_by(Asset.kind)
+            ).all()
+        counts = {kind.value: count for kind, count in rows}
+        return {"ok": True, "assets_by_kind": counts, "total": sum(counts.values())}
+    except Exception as exc:  # noqa: BLE001 — surfaced to the health endpoint
+        return {"ok": False, "error": str(exc)}
+
+
 @app.get("/")
 def root() -> dict:
     return {
@@ -45,4 +62,5 @@ def root() -> dict:
         "docs": "/docs",
         "health": "/health",
         "llm_health": "/health/llm",
+        "db_health": "/health/db",
     }

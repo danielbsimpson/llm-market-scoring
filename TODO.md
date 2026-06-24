@@ -1,10 +1,25 @@
 # LLM Market Scoring — Build Plan
 
 A local-first system that ingests financial newsletters/articles, uses swappable local LLMs
-(via `llama-cpp-python`) to score assets on a continuous outlook scale, aligns those scores with
-future market returns (via `yfinance`), trains swappable sklearn models on top, and surfaces
-everything in a React dashboard. The long-term goal is a human-in-the-loop, self-correcting
-prompt-optimization loop.
+(served by Ollama / `llama-server.exe` via an OpenAI-compatible API) to score assets on a continuous
+outlook scale, aligns those scores with future market returns (via `yfinance`), trains swappable
+sklearn models on top, and surfaces everything in a React dashboard. The long-term goal is a
+human-in-the-loop, self-correcting prompt-optimization loop.
+
+> **Status (2026-06-23):** Phases 0–1 complete and verified. Backend + frontend boot; LLM health
+> lists all local Ollama models; SQLite schema created via Alembic; 44 assets + default model seeded
+> (`/health/db` confirms). **Phase 2 in progress:** the Robinhood "Snacks" newsletter export is
+> parsed end-to-end into a clean, dated dataset (`backend/data/processed/snacks_v0.jsonl`,
+> 379 issues spanning 2019–2026).
+>
+> **Immediate next steps when resuming:**
+> 1. Wire the parsed Snacks records into the DB — register a `Source` row and upsert `Article` rows
+>    (dedupe by `content_hash` / `external_id`), reusing `app/ingestion/snacks.py`.
+> 2. Add `INGEST_DIR` to `config.py` + `.env.example` (replacing the now-unused `GMAIL_*` keys).
+> 3. Generalize into the pluggable loader/parser framework (`loader.py`, `parsers/base.py`) so other
+>    sources/formats (`.eml`/`.html`/`.txt`/`.md`) can drop into `backend/data/inbox/`.
+> 4. Then move on to Phase 3 (LLM scoring engine) using `snacks_v0.jsonl` as the first input.
+
 
 ---
 
@@ -15,7 +30,7 @@ prompt-optimization loop.
 | Backend | Python (FastAPI) |
 | Frontend | React (separate folder, monorepo) |
 | LLM serving | **OpenAI-compatible HTTP** against existing Ollama / `llama-server.exe` (abstracted; `llama-cpp-python` optional) |
-| Email ingestion | Gmail API (OAuth) — query by sender/label |
+| Article ingestion | **Local file export** — drop `.eml`/`.html`/`.txt`/`.md` into a watched folder (direct newsletter ingestion later) |
 | Storage | SQLite (relational/metadata) + Parquet (bulk timeseries/features) |
 | Score output | Structured JSON: `score ∈ [-1.0, +1.0]` + `confidence ∈ [0,1]` + `rationale` |
 | Return windows | 1d, 1w (5d), 1m (~21d), 3m (~63d) |
@@ -67,9 +82,9 @@ Verified on this machine 2026-06-23:
                          │              Backend (FastAPI)               │
                          │  Ingestion · LLM Scoring · Market · ML · API │
                          └──┬─────────┬──────────┬─────────┬───────────┘
-        Gmail API ──────────┘         │          │         └────────── yfinance
+        Local files ────────┘         │          │         └────────── yfinance
                                       │          │
-                              llama-cpp-python  sklearn
+                            Ollama / llama-server  sklearn
                                       │          │
                          ┌────────────▼──────────▼──────────┐
                          │   Storage: SQLite + Parquet        │
@@ -77,7 +92,7 @@ Verified on this machine 2026-06-23:
 ```
 
 ### Core data flow
-1. **Ingest** newsletters (Gmail API) → normalized `articles` with publish timestamp.
+1. **Ingest** exported newsletter/article files (local folder) → normalized `articles` with publish timestamp.
 2. **Score** each article through N LLM "scorers" (one per prompt/asset-config) → `scores`.
 3. **Market** data pulled from yfinance → compute forward returns over each window.
 4. **Align** scores at article time `t` against forward returns `t+window`.
@@ -106,8 +121,8 @@ llm-market-scoring/
 │   │   │   ├── session.py
 │   │   │   └── migrations/       # alembic
 │   │   ├── ingestion/
-│   │   │   ├── gmail_client.py    # OAuth + fetch
-│   │   │   ├── parsers/           # per-source HTML→text parsers (The Snack first)
+│   │   │   ├── loader.py          # scan watched folder, read .eml/.html/.txt/.md files
+│   │   │   ├── parsers/           # per-source/format parsers (The Snack first)
 │   │   │   └── normalize.py       # → Article records
 │   │   ├── llm/
 │   │   │   ├── engine.py          # LLMEngine interface + OpenAI-compatible client (Ollama/llama-server)
@@ -145,59 +160,77 @@ llm-market-scoring/
 
 # Phased Task List
 
-## Phase 0 — Project Scaffolding & Tooling
-- [ ] Create monorepo structure (`backend/`, `frontend/`).
-- [ ] Add root `.gitignore` (Python, Node, `*.gguf`, `data/`, `.env`, OAuth tokens).
-- [ ] Add `.env.example` documenting all config keys.
-- [ ] Backend: init Python project (Python 3.11+), choose `pyproject.toml` (uv/poetry) or `requirements.txt`.
-- [ ] Backend deps: `fastapi`, `uvicorn`, `pydantic`, `pydantic-settings`, `sqlalchemy`, `alembic`,
-      `pandas`, `pyarrow`, `yfinance`, `scikit-learn`, `numpy`, `llama-cpp-python`,
+## Phase 0 — Project Scaffolding & Tooling  ✅ (done 2026-06-23)
+- [x] Create monorepo structure (`backend/`, `frontend/`).
+- [x] Add root `.gitignore` (Python, Node, `*.gguf`, `data/`, `.env`, OAuth tokens).
+- [x] Add `.env.example` documenting all config keys.
+- [x] Backend: init Python project (Python 3.11.9), `requirements.txt` + `requirements-dev.txt`; venv at `backend/.venv`.
+- [x] Backend deps installed: `fastapi`, `uvicorn`, `pydantic`, `pydantic-settings`, `sqlalchemy`,
+      `alembic`, `pandas`, `pyarrow`, `yfinance`, `scikit-learn`, `numpy`, `openai`,
       `google-api-python-client`, `google-auth-oauthlib`, `beautifulsoup4`, `lxml`, `httpx`,
-      `python-multipart`. Dev: `pytest`, `ruff`, `black`, `mypy`.
-- [ ] LLM access: add `openai` (or `httpx`) client; **no `llama-cpp-python` CUDA build** — reuse the
-      existing Ollama server (`http://localhost:11434/v1`) and/or `C:\llama.cpp\llama-server.exe`.
-- [ ] Verify Ollama is reachable and list models from the app at startup (health check).
-- [ ] Frontend: scaffold React + Vite + TypeScript; add `axios`/`fetch` client, a charting lib
-      (Recharts or Plotly), and a component lib (e.g. Mantine or shadcn/ui).
-- [ ] Add `config.py` with pydantic-settings (paths, model dir, db path, Gmail scopes, windows).
-- [ ] Set up linting/formatting + a `Makefile`/`tasks.json` for common commands.
-- [ ] Write initial README with setup steps (env, model download, CUDA build, run commands).
+      `python-multipart`. Dev: `pytest`, `ruff`, `black`, `mypy`. (No `llama-cpp-python` — reuse Ollama.)
+- [x] LLM access: `openai` client via `LLMEngine` (`app/llm/engine.py`); **no `llama-cpp-python` CUDA
+      build** — reuses the existing Ollama server (`http://localhost:11434/v1`).
+- [x] Verify Ollama is reachable and list models (`/health/llm` lists all 7 local models).
+- [x] Frontend: scaffolded React + Vite + TypeScript; typed `fetch` client (`src/api/client.ts`) +
+      status dashboard (`src/App.tsx`); `npm run build` passes.
+  - [ ] Add charting lib (Recharts/Plotly) and component lib (Mantine/shadcn) — deferred to Phase 8.
+- [x] Add `config.py` with pydantic-settings (paths, db path, LLM/provider, Gmail, windows).
+- [ ] Set up lint/format config + a `Makefile`/`tasks.json` for common commands (dev tools installed; config pending).
+- [x] Write initial README with setup/run steps (reuse-Ollama, no model downloads).
 
-## Phase 1 — Storage Layer
-- [ ] Define SQLite schema (SQLAlchemy ORM) — core tables:
-  - [ ] `sources` (id, name, type, parser_key).
-  - [ ] `articles` (id, source_id, external_id, title, published_at, ingested_at, raw_html_path,
-        clean_text, hash, url).
-  - [ ] `assets` (id, symbol, kind[stock|fund|industry], name, proxy_symbol, active).
-  - [ ] `prompts` (id, name, asset_scope, markdown_path, version, hash, created_at, active).
-  - [ ] `llm_models` (id, name, gguf_path, params_json, active).
-  - [ ] `scores` (id, article_id, asset_id, prompt_id, llm_model_id, score, confidence,
-        rationale, raw_json, scored_at).
-  - [ ] `market_prices` (date, symbol, open, high, low, close, adj_close, volume) — or Parquet.
-  - [ ] `forward_returns` (symbol, date, window, fwd_return) — or computed on demand.
-  - [ ] `experiments` (id, name, config_json, created_at).
-  - [ ] `experiment_results` (id, experiment_id, metric, value, fold, created_at).
-  - [ ] `prompt_feedback` (id, prompt_id, proposed_markdown, rationale, status, created_at).
-- [ ] Decide Parquet vs SQLite per table: bulk timeseries (prices, features) → Parquet partitioned
-      by symbol/year; metadata + scores → SQLite.
-- [ ] Implement `db/session.py` + Alembic baseline migration.
-- [ ] Seed `assets` table from the locked-in universe + industry→proxy mapping.
+## Phase 1 — Storage Layer  ✅ (done 2026-06-23)
+- [x] Define SQLite schema (SQLAlchemy 2.0 ORM in `app/db/models.py`) — core tables:
+  - [x] `sources` (id, name, type, parser_key, active, created_at).
+  - [x] `articles` (id, source_id, external_id, title, url, published_at, ingested_at,
+        raw_html_path, clean_text, hash) — unique(source_id, external_id); indexed published_at, hash.
+  - [x] `assets` (id, symbol[unique], kind[stock|fund|industry], name, proxy_symbol, active).
+  - [x] `prompts` (id, name, asset_scope, markdown_path, version, hash, active, created_at) — unique(name, version).
+  - [x] `llm_models` (id, name[unique], provider, ref, params_json, active) — `ref` replaces gguf_path (Ollama).
+  - [x] `scores` (id, article_id, asset_id, prompt_id, llm_model_id, score, confidence,
+        rationale, raw_json, scored_at) — unique combo for skip-already-scored.
+  - [x] `market_prices` (symbol, date, OHLC, adj_close, volume) — unique(symbol, date).
+  - [x] `forward_returns` (symbol, date, window, fwd_return) — unique(symbol, date, window).
+  - [x] `experiments` (id, name, config_json, created_at).
+  - [x] `experiment_results` (id, experiment_id, metric, value, fold, created_at).
+  - [x] `prompt_feedback` (id, prompt_id, proposed_markdown, rationale, status, created_at).
+- [x] Implemented `app/db/session.py` (engine + SessionLocal + get_db + init_db; resolves relative
+      SQLite path against backend root) and Alembic baseline migration (`render_as_batch` for SQLite).
+- [x] Seeded `assets` (19 funds + 2 stocks + 23 industries w/ proxy ETFs) + default model via
+      `app/db/seed.py` (idempotent). Added `/health/db` endpoint.
+- [ ] Decide Parquet vs SQLite split for bulk timeseries — deferred to Phase 4 (tables exist for now).
 
-## Phase 2 — Email / Article Ingestion
-- [ ] **Gmail API setup**: document creating a Google Cloud project, enabling Gmail API, OAuth
-      consent screen (Testing), download `credentials.json` (git-ignored).
-- [ ] `gmail_client.py`: OAuth flow (store `token.json`), read-only scope
-      (`gmail.readonly`).
-- [ ] Query builder: fetch by sender (The Snack) / label / date range; paginate; capture message
-      `internalDate` as the authoritative `published_at`.
-- [ ] Save raw HTML to disk (`data/raw/<source>/<msg_id>.html`) and record metadata.
-- [ ] **Parser framework**: `parsers/base.py` interface; first concrete parser `the_snack.py`
-      (BeautifulSoup) → clean article text + segment per section if needed.
-- [ ] `normalize.py`: dedupe by content hash, store `Article` rows.
-- [ ] CLI/endpoint: `ingest --source the_snack --since <date>`; idempotent re-runs.
-- [ ] **Extensibility**: document how to add a new source (register parser + source row). Plan for
-      future generic ingestion (RSS, manual file upload, pasted text).
-- [ ] Tests with a few saved sample emails (fixtures) — no live Gmail needed in CI.
+## Phase 2 — Local File Ingestion  🟡 (in progress)
+### Done (2026-06-23)
+- [x] **Snacks mbox parser** (`app/ingestion/snacks.py`): parses the Gmail-export mbox
+      (`backend/data/Robinhood_Snacks.txt`, ~59 MB / 380 messages) end-to-end.
+  - [x] Extracts the `text/html` part (the export's `text/plain` parts are empty), decodes
+        quoted-printable + UTF-8, decodes RFC-2047 subjects.
+  - [x] **Accurate timestamps**: parses the `Date` header to a timezone-aware `published_at`
+        (naive → UTC fallback).
+  - [x] **Robust cleaning** (`_clean_lines`) verified across 2019/2021/2023/2025/2026 formats:
+        HTML→text with paragraph breaks; strips sponsor `Presented by …` ad blocks, quiz prompts,
+        era-specific legal/footers, market-moves index tables, photo credits, subscription CTAs and
+        footnotes; keeps legit content (e.g. "Getty Images" the company in earnings calendars).
+  - [x] De-dupes by `Message-ID` + content hash; writes `data/processed/snacks_v0.jsonl`
+        (379 issues, 2019-03-25 → 2026-06-22, ~959 words avg; fields: `external_id, source, subject,
+        sender, published_at, text, word_count, content_hash`).
+  - [x] CLI: `python -m app.ingestion.snacks [--input <mbox>] [--output <jsonl>]`.
+
+### Next
+- [ ] **Persist to DB**: `normalize.py` (or extend `snacks.py`) to register a `Source` row
+      (parser_key = `robinhood_snacks`) and upsert `Article` rows from `snacks_v0.jsonl`
+      (skip seen `content_hash`/`external_id`); record original file path.
+- [ ] **Config**: add `INGEST_DIR` (default `backend/data/inbox/`) to `config.py` + `.env.example`;
+      remove the unused `GMAIL_*` keys.
+- [ ] **Generalize**: `loader.py` to scan `INGEST_DIR` for `.eml`/`.html`/`.htm`/`.txt`/`.md`,
+      resolving `published_at` from headers / front-matter / filename date / file mtime;
+      `parsers/base.py` interface so `snacks.py` becomes one pluggable parser among many.
+- [ ] CLI/endpoint: `ingest --source the_snack --dir <path>`; idempotent re-runs.
+- [ ] **Extensibility**: document how to add a new source/format (register parser + source row).
+- [ ] Tests with a few saved sample export files (fixtures), incl. a small mbox slice.
+- [ ] *(Later)* Optional direct ingestion: Gmail API / IMAP / RSS / paste-text — see Phase 12.
+
 
 ## Phase 3 — LLM Scoring Engine
 - [ ] `llm/schema.py`: pydantic model for score output:
@@ -254,7 +287,7 @@ llm-market-scoring/
 
 ## Phase 7 — Backend API (FastAPI)
 - [ ] Routes:
-  - [ ] `POST /ingest` — trigger Gmail ingestion (params: source, since).
+  - [ ] `POST /ingest` — trigger local-file ingestion (params: source, dir).
   - [ ] `GET /articles` — list/filter/paginate; `GET /articles/{id}`.
   - [ ] `GET/POST/PUT /prompts` — list, read markdown, edit/save (versioned), activate.
   - [ ] `GET/POST /models` — list registered GGUF models, register/activate, swap.
@@ -302,10 +335,11 @@ llm-market-scoring/
 - [ ] CI (GitHub Actions): lint (ruff/black), type-check (mypy), pytest (CPU-only, no GGUF).
 - [ ] Expand README: architecture, setup, adding a source, adding a prompt, adding a model,
       running experiments, interpreting metrics.
-- [ ] Document data/privacy: OAuth tokens and email content stay local; nothing leaves the machine.
+- [ ] Document data/privacy: exported files and all data stay local; nothing leaves the machine.
 
 ## Phase 12 — Stretch / Future
-- [ ] Generic ingestion: RSS feeds, manual upload, paste-text, more newsletters.
+- [ ] Direct/automated ingestion (longer-term): Gmail API / IMAP, RSS feeds, paste-text, more
+      newsletters — reducing the manual export step.
 - [ ] Expand universe to arbitrary tickers/industries; auto proxy discovery.
 - [ ] Confidence-weighted ensembling across multiple LLMs/prompts.
 - [ ] Richer features (macro data, options/IV, cross-asset signals).
@@ -317,7 +351,7 @@ llm-market-scoring/
 ---
 
 ## Open Items / To Revisit
-- [ ] Pick default scorer model from existing Ollama models (suggest `qwen2.5:7b`).
+- [x] Pick default scorer model from existing Ollama models — **`qwen2.5:7b`** (set in `backend/.env`).
 - [ ] Finalize industry→proxy-ETF mapping table for industries without direct funds.
 - [ ] Decide chunking/aggregation policy for long newsletters.
 - [ ] Decide primary ML target first: forward return (regression) vs direction (classification).
