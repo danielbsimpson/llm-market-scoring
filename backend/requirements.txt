@@ -1,0 +1,35 @@
+# Backend runtime dependencies
+fastapi>=0.111
+uvicorn[standard]>=0.30
+pydantic>=2.7
+pydantic-settings>=2.3
+python-dotenv>=1.0
+
+# Storage
+SQLAlchemy>=2.0
+alembic>=1.13
+pandas>=2.2
+pyarrow>=16.0
+numpy>=1.26
+
+# LLM access (OpenAI-compatible client for Ollama / llama-server)
+openai>=1.30
+httpx>=0.27
+
+# Market data
+yfinance>=0.2.40
+
+# Machine learning
+scikit-learn>=1.5
+
+# Email ingestion (Gmail API)
+google-api-python-client>=2.130
+google-auth>=2.30
+google-auth-oauthlib>=1.2
+
+# HTML parsing
+beautifulsoup4>=4.12
+lxml>=5.2
+
+# Misc
+python-multipart>=0.0.9
