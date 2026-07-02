@@ -14,6 +14,7 @@ from app.db.models import Asset
 from app.db.session import SessionLocal
 from app.llm.engine import engine
 from app.api.routes.ingest import router as ingest_router
+from app.api.routes.market import router as market_router
 from app.api.routes.score import router as score_router
 
 app = FastAPI(
@@ -31,6 +32,7 @@ app.add_middleware(
 )
 
 app.include_router(ingest_router)
+app.include_router(market_router)
 app.include_router(score_router)
 
 

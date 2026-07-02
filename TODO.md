@@ -6,14 +6,17 @@ outlook scale, aligns those scores with future market returns (via `yfinance`), 
 sklearn models on top, and surfaces everything in a React dashboard. The long-term goal is a
 human-in-the-loop, self-correcting prompt-optimization loop.
 
-> **Status (2026-07-02):** Phases 0–3 complete and verified. Backend + frontend boot; 379 Snacks
-> `Article` rows in DB; LLM scoring engine live — `Scorer` batches by asset kind (fund/stock/industry,
-> 3 calls per article), `PromptLoader` registers hash-versioned prompts in DB, `parse_score_response`
-> repairs malformed JSON with regex extraction + retry. 4 prompt files in `app/llm/prompts/`.
-> `POST /score` + `GET /score/prompts` endpoints live. CLI: `python -m app.llm`. 52 tests pass.
+> **Status (2026-07-02):** Phases 0–4 complete and verified. Backend + frontend boot; 379 Snacks
+> `Article` rows in DB; LLM scoring engine live (52 tests). Phase 4 market layer live:
+> `YFinanceClient` (Parquet cache, incremental fetch, rate-limit spacing), `compute_forward_returns`
+> (vectorised, 4 windows), `upsert_market_prices` / `upsert_forward_returns` (SQLite upsert),
+> `refresh_symbol` orchestrator. `POST /market/refresh`, `GET /market/symbols`,
+> `GET /market/status`, `GET /market/prices/{symbol}`, `GET /market/returns/{symbol}` live.
+> CLI: `python -m app.market [--symbols ...] [--start DATE] [--prices-only] [--status]`.
+> 82 tests pass (30 new in `tests/market/`).
 >
 > **Immediate next steps when resuming:**
-> 1. Phase 4: pull market prices from yfinance for all universe symbols + proxy ETFs.
+> 1. Run a real market refresh: `python -m app.market --symbols SPY QQQ VGT` (requires internet).
 > 2. Phase 5: align scores → forward returns to build the training dataset.
 > 3. Optionally run a real scoring pass: `python -m app.llm --limit 5` (requires Ollama running).
 
@@ -249,15 +252,20 @@ llm-market-scoring/
       required) — JSON repair, prompt parsing, PromptLoader versioning, batch-by-kind, retries,
       skip-already-scored, invalid model handling. Total suite: 52 tests.
 
-## Phase 4 — Market Data (yfinance)
-- [ ] `market/yfinance_client.py`: fetch daily OHLCV for all universe symbols + proxy symbols;
-      cache to Parquet; incremental updates; rate-limit/backoff handling.
-- [ ] `market/universe.py`: asset metadata + industry→proxy-ETF mapping (configurable).
-- [ ] `market/returns.py`: compute forward returns for windows **1d, 1w (5 trading days),
-      1m (~21d), 3m (~63d)** from a given article date; handle non-trading days (use next session).
-- [ ] Optional baseline features: rolling volatility, prior-window return, relative-to-SPY return.
-- [ ] Endpoint/CLI to refresh market data; document scheduling (manual now, cron later).
-- [ ] Tests with cached fixture price data (no live network in CI).
+## Phase 4 — Market Data (yfinance)  ✅ (complete 2026-07-02)
+- [x] `market/yfinance_client.py`: `YFinanceClient` — `fetch_incremental` (Parquet cache, tail-only
+      download), `fetch_universe` (rate-limit spacing, per-symbol error isolation).
+- [x] `market/universe.py`: `get_tradable_symbols(db)` (funds + stocks + proxy ETFs, deduped),
+      `get_symbol_to_proxy(db)`, `get_price_symbol()` helper.
+- [x] `market/returns.py`: `align_to_next_session` (strict-after, look-ahead safe),
+      `compute_forward_returns` (vectorised pandas `shift(-w)`, windows 1/5/21/63 from config),
+      `upsert_market_prices` + `upsert_forward_returns` (SQLite `INSERT … ON CONFLICT`, batched),
+      `refresh_symbol` orchestrator.
+- [x] CLI: `python -m app.market [--symbols ...] [--start DATE] [--prices-only] [--status]`.
+- [x] API: `POST /market/refresh`, `GET /market/symbols`, `GET /market/status`,
+      `GET /market/prices/{symbol}`, `GET /market/returns/{symbol}`.
+- [x] Tests: 30 new tests in `tests/market/` (mocked yfinance, no live network). Total: 82 passing.
+- [ ] Optional baseline features (rolling vol, prior-window return, SPY-relative) — deferred to Phase 6.
 
 ## Phase 5 — Score ↔ Return Alignment
 - [ ] Build the aligned dataset: join `scores` (at `published_at`) with `forward_returns`
