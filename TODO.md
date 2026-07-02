@@ -6,19 +6,17 @@ outlook scale, aligns those scores with future market returns (via `yfinance`), 
 sklearn models on top, and surfaces everything in a React dashboard. The long-term goal is a
 human-in-the-loop, self-correcting prompt-optimization loop.
 
-> **Status (2026-06-23):** Phases 0–1 complete and verified. Backend + frontend boot; LLM health
+> **Status (2026-07-02):** Phases 0–2 complete and verified. Backend + frontend boot; LLM health
 > lists all local Ollama models; SQLite schema created via Alembic; 44 assets + default model seeded
-> (`/health/db` confirms). **Phase 2 in progress:** the Robinhood "Snacks" newsletter export is
-> parsed end-to-end into a clean, dated dataset (`backend/data/processed/snacks_v0.jsonl`,
-> 379 issues spanning 2019–2026).
+> (`/health/db` confirms); Robinhood Snacks mbox parsed and persisted — 379 `Article` rows in the DB
+> under `Source` id=1 (`parser_key=robinhood_snacks`). Pluggable ingestion framework in place
+> (`parsers/base.py`, `loader.py`, `normalize.py`); `POST /ingest` API endpoint live; 26 tests pass.
 >
 > **Immediate next steps when resuming:**
-> 1. Wire the parsed Snacks records into the DB — register a `Source` row and upsert `Article` rows
->    (dedupe by `content_hash` / `external_id`), reusing `app/ingestion/snacks.py`.
-> 2. Add `INGEST_DIR` to `config.py` + `.env.example` (replacing the now-unused `GMAIL_*` keys).
-> 3. Generalize into the pluggable loader/parser framework (`loader.py`, `parsers/base.py`) so other
->    sources/formats (`.eml`/`.html`/`.txt`/`.md`) can drop into `backend/data/inbox/`.
-> 4. Then move on to Phase 3 (LLM scoring engine) using `snacks_v0.jsonl` as the first input.
+> 1. Move on to Phase 3 (LLM scoring engine) — `snacks_v0.jsonl` is now superseded by the DB;
+>    score directly from `Article` rows via `app.db.models.Article`.
+> 2. Create starter prompts in `app/llm/prompts/*.md` (multi-asset scorer + a few sector-specific).
+> 3. Implement `llm/scorer.py` to run (article × prompt × model) → structured `Score` rows.
 
 
 ---
@@ -200,7 +198,7 @@ llm-market-scoring/
       `app/db/seed.py` (idempotent). Added `/health/db` endpoint.
 - [ ] Decide Parquet vs SQLite split for bulk timeseries — deferred to Phase 4 (tables exist for now).
 
-## Phase 2 — Local File Ingestion  🟡 (in progress)
+## Phase 2 — Local File Ingestion  ✅ (complete 2026-07-02)
 ### Done (2026-06-23)
 - [x] **Snacks mbox parser** (`app/ingestion/snacks.py`): parses the Gmail-export mbox
       (`backend/data/Robinhood_Snacks.txt`, ~59 MB / 380 messages) end-to-end.
@@ -217,19 +215,23 @@ llm-market-scoring/
         sender, published_at, text, word_count, content_hash`).
   - [x] CLI: `python -m app.ingestion.snacks [--input <mbox>] [--output <jsonl>]`.
 
-### Next
-- [ ] **Persist to DB**: `normalize.py` (or extend `snacks.py`) to register a `Source` row
-      (parser_key = `robinhood_snacks`) and upsert `Article` rows from `snacks_v0.jsonl`
-      (skip seen `content_hash`/`external_id`); record original file path.
-- [ ] **Config**: add `INGEST_DIR` (default `backend/data/inbox/`) to `config.py` + `.env.example`;
-      remove the unused `GMAIL_*` keys.
-- [ ] **Generalize**: `loader.py` to scan `INGEST_DIR` for `.eml`/`.html`/`.htm`/`.txt`/`.md`,
-      resolving `published_at` from headers / front-matter / filename date / file mtime;
-      `parsers/base.py` interface so `snacks.py` becomes one pluggable parser among many.
-- [ ] CLI/endpoint: `ingest --source the_snack --dir <path>`; idempotent re-runs.
-- [ ] **Extensibility**: document how to add a new source/format (register parser + source row).
-- [ ] Tests with a few saved sample export files (fixtures), incl. a small mbox slice.
-- [ ] *(Later)* Optional direct ingestion: Gmail API / IMAP / RSS / paste-text — see Phase 12.
+### Done (2026-07-02)
+- [x] **Persist to DB**: `normalize.py` registers a `Source` row and upserts `Article` rows from the
+      mbox file (dedupe by `external_id` + `content_hash`); 379 Snacks articles in DB, idempotent.
+- [x] **Config**: added `INGEST_DIR` (default `backend/data/inbox/`) to `config.py` + `.env.example`;
+      removed unused `GMAIL_*` active keys (kept as commented-out lines for Phase 12 reference).
+- [x] **Pluggable framework**: `parsers/base.py` (`ParsedArticle` + `ParserBase`), `parsers/snacks.py`
+      (wraps existing mbox logic), `parsers/generic.py` (`GenericTextParser`/`GenericHtmlParser`/
+      `GenericEmailParser`), registry in `parsers/__init__.py`; `loader.py` orchestrator.
+- [x] **CLI**: `python -m app.ingestion --source NAME --path PATH [--parser-key KEY]`;
+      `--list-parsers` shows registered parsers; idempotent re-runs confirmed.
+- [x] **API endpoint**: `POST /ingest` + `GET /ingest/parsers` in `app/api/routes/ingest.py`;
+      path-traversal guard (must be within `data_dir`); mounted on `app.main`.
+- [x] **Tests**: 26 tests passing (`tests/ingestion/`) — snacks parser, normalize upsert, loader
+      orchestration, with synthetic mbox fixture and tmp_path directory tests.
+
+### Deferred
+- [ ] *(Phase 12)* Optional direct ingestion: Gmail API / IMAP / RSS / paste-text.
 
 
 ## Phase 3 — LLM Scoring Engine

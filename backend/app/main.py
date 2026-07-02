@@ -13,6 +13,7 @@ from app.config import settings
 from app.db.models import Asset
 from app.db.session import SessionLocal
 from app.llm.engine import engine
+from app.api.routes.ingest import router as ingest_router
 
 app = FastAPI(
     title="LLM Market Scoring",
@@ -27,6 +28,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(ingest_router)
 
 
 @app.get("/health")
@@ -63,4 +66,5 @@ def root() -> dict:
         "health": "/health",
         "llm_health": "/health/llm",
         "db_health": "/health/db",
+        "ingest": "/ingest",
     }

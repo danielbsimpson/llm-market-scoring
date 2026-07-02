@@ -34,10 +34,8 @@ class Settings(BaseSettings):
     llm_num_ctx: int = 4096
     llm_temperature: float = 0.2
 
-    # Gmail ingestion
-    gmail_credentials_file: Path = BACKEND_ROOT / "secrets" / "credentials.json"
-    gmail_token_file: Path = BACKEND_ROOT / "secrets" / "token.json"
-    gmail_snack_sender: str = ""
+    # Local file ingestion
+    ingest_dir: Path = BACKEND_ROOT / "data" / "inbox"
 
     # Market data — forward return windows in trading days
     return_windows: str = "1,5,21,63"
@@ -56,3 +54,4 @@ settings = Settings()
 
 # Ensure runtime directories exist.
 settings.data_dir.mkdir(parents=True, exist_ok=True)
+settings.ingest_dir.mkdir(parents=True, exist_ok=True)
