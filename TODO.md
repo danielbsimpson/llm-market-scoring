@@ -6,17 +6,16 @@ outlook scale, aligns those scores with future market returns (via `yfinance`), 
 sklearn models on top, and surfaces everything in a React dashboard. The long-term goal is a
 human-in-the-loop, self-correcting prompt-optimization loop.
 
-> **Status (2026-07-02):** Phases 0–2 complete and verified. Backend + frontend boot; LLM health
-> lists all local Ollama models; SQLite schema created via Alembic; 44 assets + default model seeded
-> (`/health/db` confirms); Robinhood Snacks mbox parsed and persisted — 379 `Article` rows in the DB
-> under `Source` id=1 (`parser_key=robinhood_snacks`). Pluggable ingestion framework in place
-> (`parsers/base.py`, `loader.py`, `normalize.py`); `POST /ingest` API endpoint live; 26 tests pass.
+> **Status (2026-07-02):** Phases 0–3 complete and verified. Backend + frontend boot; 379 Snacks
+> `Article` rows in DB; LLM scoring engine live — `Scorer` batches by asset kind (fund/stock/industry,
+> 3 calls per article), `PromptLoader` registers hash-versioned prompts in DB, `parse_score_response`
+> repairs malformed JSON with regex extraction + retry. 4 prompt files in `app/llm/prompts/`.
+> `POST /score` + `GET /score/prompts` endpoints live. CLI: `python -m app.llm`. 52 tests pass.
 >
 > **Immediate next steps when resuming:**
-> 1. Move on to Phase 3 (LLM scoring engine) — `snacks_v0.jsonl` is now superseded by the DB;
->    score directly from `Article` rows via `app.db.models.Article`.
-> 2. Create starter prompts in `app/llm/prompts/*.md` (multi-asset scorer + a few sector-specific).
-> 3. Implement `llm/scorer.py` to run (article × prompt × model) → structured `Score` rows.
+> 1. Phase 4: pull market prices from yfinance for all universe symbols + proxy ETFs.
+> 2. Phase 5: align scores → forward returns to build the training dataset.
+> 3. Optionally run a real scoring pass: `python -m app.llm --limit 5` (requires Ollama running).
 
 
 ---
@@ -234,25 +233,21 @@ llm-market-scoring/
 - [ ] *(Phase 12)* Optional direct ingestion: Gmail API / IMAP / RSS / paste-text.
 
 
-## Phase 3 — LLM Scoring Engine
-- [ ] `llm/schema.py`: pydantic model for score output:
-      `{ "asset": str, "score": float[-1,1], "confidence": float[0,1], "rationale": str }`
-      (allow a list for multi-asset prompts). Strict JSON validation + repair/retry on malformed output.
-- [ ] `llm/engine.py` + `llm/providers.py`: `LLMEngine` interface over an OpenAI-compatible client;
-      default provider = Ollama (`http://localhost:11434/v1`), alt = `llama-server.exe`; expose
-      `generate(prompt, **params)`; **hot-swap** models by name; use JSON mode / `format=json`
-      (Ollama) or `response_format` to force valid JSON; keep `num_ctx≈4096` for 8 GB.
-- [ ] **Prompt-as-markdown**: `llm/prompts/*.md` files with frontmatter
-      (name, asset_scope, model hint) + body = system prompt. Editing the file changes behavior.
-  - [ ] Create starter prompts: one generic per-article multi-asset scorer, plus a few
-        asset/industry-specific prompts (e.g. `semiconductors.md`, `energy.md`, `defense.md`).
-  - [ ] Template variables: `{article_text}`, `{asset_list}`, `{published_at}`, score-scale spec.
-- [ ] `llm/scorer.py`: orchestrate — for each (article × prompt × model), build prompt, run engine,
-      validate JSON, persist `scores`. Support running the **same article through multiple prompts/
-      models** (the multi-LLM requirement).
-- [ ] Batch runner + progress; skip already-scored (article, prompt, model) combos.
-- [ ] Token/length guard: chunk long articles; aggregation strategy (mean/weighted) documented.
-- [ ] Tests: mock engine to validate schema enforcement, retry, persistence.
+## Phase 3 — LLM Scoring Engine  ✅ (complete 2026-07-02)
+- [x] `llm/schema.py`: extended with `parse_score_response()` — direct parse → code-fence strip
+      → regex JSON extraction → returns `None` (caller retries). Pydantic validation on bounds.
+- [x] `llm/scorer.py`: `parse_prompt_file()` + `PromptLoader` (hash-versioned DB registration,
+      deactivates stale versions) + `Scorer` (batches by kind: fund/stock/industry = 3 LLM calls
+      per article/prompt/model; skips already-scored combos; configurable retries + article truncation).
+- [x] **Prompt files** (`app/llm/prompts/*.md`): `multi_asset.md` (generic scorer, `$variable`
+      placeholders), `semiconductors.md`, `energy.md`, `defense.md` (specialist prompts).
+- [x] **CLI**: `python -m app.llm [--prompt NAME] [--model REF] [--limit N] [--article-ids ...]`;
+      `--list-prompts` shows available files.
+- [x] **API**: `POST /score` (synchronous, default limit=10 to guard against accidental full runs)
+      + `GET /score/prompts`; mounted in `app.main`.
+- [x] **Tests**: 26 new tests in `tests/llm/test_scorer.py` using a mock `LLMEngine` (no Ollama
+      required) — JSON repair, prompt parsing, PromptLoader versioning, batch-by-kind, retries,
+      skip-already-scored, invalid model handling. Total suite: 52 tests.
 
 ## Phase 4 — Market Data (yfinance)
 - [ ] `market/yfinance_client.py`: fetch daily OHLCV for all universe symbols + proxy symbols;
